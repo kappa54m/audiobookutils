@@ -1,0 +1,13 @@
+defaults:
+  - logging/console_log
+  - _self_
+
+# List of paths to audio files of the audiobook.
+# If there is more than one file, list order should follow the chronological order of the audio files' contents.
+audio_files: ???
+compute_type: "float16"
+batch_size: 16
+transcription_model: "large-v2"
+
+# e.g., out/results/yourbookname
+result_dir: ???

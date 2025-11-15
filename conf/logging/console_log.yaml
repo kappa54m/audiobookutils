@@ -1,0 +1,5 @@
+defaults:
+  - logging_base
+
+console_logging_level: INFO
+do_file_logging: false

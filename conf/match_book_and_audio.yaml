@@ -1,0 +1,18 @@
+defaults:
+  - logging: console_log
+  - paging: paging_base
+  - _self_
+
+# Path to .epub file
+ebook_path: ???
+# List of paths to audio transcription JSON files (from preprocessing)
+# e.g., ["out/results/yourbookname/transcription.json"]
+transcription_result_paths: ???
+# Directory to save results
+# Intermediate results may be read from here if this directory is not empty
+output_dir: ???
+
+# Use a dynamic programming algorithm during the transcriptiong <-> ebook matching process.
+# This option can produce a more faithful alignment but can be slower.
+aligner_use_dp: true
+
