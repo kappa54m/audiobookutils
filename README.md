@@ -47,6 +47,9 @@ export LD_LIBRARY_PATH="$(pwd)/.venv/lib/python3.11/site-packages/nvidia/cudnn/l
 ## Roadmap
 - Automatic audiobook reading generation via TTS
 
+## Notes
+- Due to the way the forced aligner works, during fuzzy matching the audio transcriptions have an extra space in between words with the default setting (`append_space_to_words=true` in [./conf/preprocessing.yaml](./conf/preprocessing.yaml); these "words" are joined for fuzzy matching with a space delimiter creating double space), to prevent multiple words from being matched simultaneosly. This was initially an unintentional bug during development, but in the end seems to work out, despite the hackiness of the solution.
+
 ## Related Project
 There are multiple open source projects that achieve a similar goal to this project, which I was not aware of when I first started development. This project is still unique in that it produces subtitle files for each audiobook reading, but practically, preexisting tools - especially ones that utilize the media overlay feature of EPUB 3 to create *read aloud* books are superior methods of consuming/storing audiobooks.
 

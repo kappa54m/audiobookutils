@@ -25,13 +25,16 @@ class AudioPreprocessor(Preprocessor):
     Utilizes WhisperX (https://github.com/m-bain/whisperx) for transcription.
     """
     def __init__(self, loggerfactory: LoggerFactory, file_paths: Sequence[os.PathLike],
-                 device: str, batch_size=16, compute_type='float16', whisper_model='large-v2'):
+                 device: str, append_space_to_words: bool=True,
+                 batch_size=16, compute_type='float16', whisper_model='large-v2'):
         """
         Args:
             file_paths: Paths to audio files for the audiobook
+            append_space_to_words: For each audio chunk, append space at the end
         """
         self.logger = loggerfactory.get_logger(self.__class__.__name__)
         self.file_paths = file_paths
+        self.append_space_to_words = append_space_to_words
         for pth in self.file_paths:
             if not Path(pth).is_file():
                 raise ValueError("Invalid file: {}".format(pth))
@@ -58,8 +61,9 @@ class AudioPreprocessor(Preprocessor):
 
             for segment in align_result['segments']:
                 for word_seg in segment['words']:
-                    #word = word_seg['word'] + " "
                     word = word_seg['word']
+                    if self.append_space_to_words:
+                        word += " "
                     transcription_chunks.append(AudioTranscriptionChunk(
                         file_path=audio_file_path,
                         start_secs=float(word_seg['start']),

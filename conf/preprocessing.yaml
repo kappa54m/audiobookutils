@@ -5,6 +5,11 @@ defaults:
 # List of paths to audio files of the audiobook.
 # If there is more than one file, list order should follow the chronological order of the audio files' contents.
 audio_files: ???
+
+# For each audio chunk transcribed, append space to it.
+# For some reason if this is disabled during the alignment step, alignment happens on multiple chunks (but processing is faster).
+append_space_to_words: true
+
 compute_type: "float16"
 batch_size: 16
 transcription_model: "large-v2"

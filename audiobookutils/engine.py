@@ -200,7 +200,9 @@ def main(conf: DictConfig):
     from .common import audiobooktranscription_from_dict
 
 
-    aligner = GlobalNormalizedWordAligner(loggerfactory=lf, use_dp=conf['aligner_use_dp'])
+    aligner = GlobalNormalizedWordAligner(loggerfactory=lf,
+                                          use_dp=conf['aligner_use_dp'],
+                                          remove_spaces_around_matches=conf['aligner_remove_whitespaces_around_words'])
     renderer = SRTRenderer(loggerfactory=lf, output_directory=output_dir)
     engine = Engine(loggerfactory=lf, aligner=aligner, renderer=renderer)
 

@@ -13,6 +13,9 @@ transcription_result_paths: ???
 output_dir: ???
 
 # Use a dynamic programming algorithm during the transcriptiong <-> ebook matching process.
-# This option can produce a more faithful alignment but can be slower.
+# This option can produce a more faithful alignment but can be significantly slower.
 aligner_use_dp: true
+
+# Enabling this can lead to possibly much longer matching time.
+aligner_remove_whitespaces_around_words: false
 
