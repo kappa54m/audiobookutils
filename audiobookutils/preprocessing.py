@@ -88,7 +88,8 @@ def main(conf: DictConfig):
                                      file_paths=audio_file_paths,
                                      device=device,
                                      batch_size=conf['batch_size'], compute_type=conf['compute_type'],
-                                     whisper_model=conf['transcription_model'])
+                                     whisper_model=conf['transcription_model'],
+                                     append_space_to_words=conf['append_space_to_words'])
     logger.info("Preprocessing...")
     transcription_result = preprocessor.preprocess()
     result_dir = Path(conf['result_dir'])

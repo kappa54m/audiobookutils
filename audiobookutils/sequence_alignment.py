@@ -64,12 +64,11 @@ class GlobalNormalizedWordAligner(CorpusAligner):
         match_stats = defaultdict(lambda: 0)
         source_match_intervals, target_match_intervals = [], []
         spaces_pat = re.compile(r"^(\s*)([^\s].*[^\s])(\s*)$")
+        word_pat = re.compile(r"\b\w+\b")
 
-        def remove_spaces(_s: str, _og_interval: tuple[int, int]) -> tuple[int, int]:
-            """
-            Remove leading and training spaces of substring of `_s` in `_og_interval` ((start, end); end is exclusive)
-            Returns: new interval without leading & trailing spaces (start, end), where end is exclusive
-            """
+        def strip(_s: str, _og_interval: tuple[int, int]) -> tuple[int, int]:
+            """Remove leading and training spaces of substring of `_s` in `_og_interval` ((start, end); end is exclusive)
+            Returns: new interval without leading & trailing spaces (start, end), where end is exclusive"""
             m = spaces_pat.search(_s[_og_interval[0]:_og_interval[1]])
             if m is not None:
                 rel = m.span(2)
@@ -78,6 +77,24 @@ class GlobalNormalizedWordAligner(CorpusAligner):
                 # Must be all spaces, return empty interval
                 return (_og_interval[0], _og_interval[0])
 
+        def _split_into_words(_source_idx_begin, _source_idx_end, _target_idx_begin, _target_idx_end):
+            """
+            If source and target segments have equal number of (nonconsecutive) spaces, split them and return sub sequence intervals.
+            _end arguments are inclusive.
+            """
+            _src_word_matches = list(word_pat.finditer(source_corpus_merged, _source_idx_begin, _source_idx_end+1))
+            _tgt_word_matches = list(word_pat.finditer(target_words_merged, _target_idx_begin, _target_idx_end+1))
+            if len(_src_word_matches) == len(_tgt_word_matches):
+                return {
+                    'source': [(m.start(0), m.end(0)-1) for m in _src_word_matches],
+                    'target': [(m.start(0), m.end(0)-1) for m in _tgt_word_matches],
+                }
+            else: # Do not split when #words unequal
+                return {
+                    'source': [(_source_idx_begin, _source_idx_end)],
+                    'target': [(_target_idx_begin, _target_idx_end)]
+                }
+
         for tag, source_idx_begin, source_idx_end, target_idx_begin, target_idx_end in opcodes:
             match tag:
                 case 'equal' | 'replace':
@@ -85,11 +102,13 @@ class GlobalNormalizedWordAligner(CorpusAligner):
                     assert isinstance(target_idx_begin, int) and isinstance(target_idx_end, int)
                     assert source_idx_end - source_idx_begin > 0 and target_idx_end - target_idx_begin > 0
                     if self.remove_spaces_around_matches:
-                        source_idx_begin, source_idx_end = remove_spaces(source_corpus_merged, (source_idx_begin, source_idx_end))
-                        target_idx_begin, target_idx_end = remove_spaces(target_words_merged, (target_idx_begin, target_idx_end))
+                        source_idx_begin, source_idx_end = strip(source_corpus_merged, (source_idx_begin, source_idx_end))
+                        target_idx_begin, target_idx_end = strip(target_words_merged, (target_idx_begin, target_idx_end))
                     if source_idx_end - source_idx_begin > 0 and target_idx_end - target_idx_begin > 0:
-                        source_match_intervals.append((source_idx_begin, source_idx_end - 1))
-                        target_match_intervals.append((target_idx_begin, target_idx_end - 1))
+                        new_intervals = _split_into_words(source_idx_begin, source_idx_end-1, target_idx_begin, target_idx_end-1)
+                        assert len(new_intervals['source']) == len(new_intervals['target'])
+                        source_match_intervals.extend(new_intervals['source'])
+                        target_match_intervals.extend(new_intervals['target'])
                 case 'insert':
                     pass
                 case 'delete':

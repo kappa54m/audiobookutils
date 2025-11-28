@@ -7,8 +7,10 @@ defaults:
 audio_files: ???
 
 # For each audio chunk transcribed, append space to it.
-# For some reason if this is disabled during the alignment step, alignment happens on multiple chunks (but processing is faster).
-append_space_to_words: true
+# If this is set, during alignment the transcription will have two spaces between each word,
+# so the aligner will always pick a word-level match.
+# This maybe slower and is considered a hacky solution, so in most cases it should not be set.
+append_space_to_words: false
 
 compute_type: "float16"
 batch_size: 16
