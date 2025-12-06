@@ -25,16 +25,57 @@ def textsegment_from_dict(d: dict) -> TextSegment:
 
 
 @dataclass
+class EpubChapterMapping:
+    """
+    Character-Level mapping information from the plaintext of an EPUB chapter to the original HTML.
+
+    The purpose of this data is to use this mapping from the plaintext of a chapter which
+    is synchronized with the audio reading to the original EPUB chapter pointed by an href,
+    such that the audio synchronization information can be embedded into the original EPUB HTML data
+    in order to create a readaloud book.
+    """
+    # Chapter index
+    chapter_index: int
+    # Original EPUB href of chapter
+    href: str
+    # 1:1 mapping from plain text to the corresponding positions in the EPUB html (pointed by the href)
+    # Must be the same length as the plain text.
+    plaintext2html: list[int]
+
+    def to_serializable_dict(self):
+        return {
+            'chapter_index': self.chapter_index,
+            'href': self.href,
+            'plaintext2html': self.plaintext2html,
+        }
+
+    def __post_init__(self):
+        for i in range(len(self.plaintext2html) - 1):
+            assert self.plaintext2html[i] >= 0
+            assert self.plaintext2html[i] <= self.plaintext2html[i+1]
+
+
+def epub_chapter_mapping_from_dict(d: dict) -> EpubChapterMapping:
+    return EpubChapterMapping(
+        chapter_index=int(d['chapter_index']),
+        href=str(d['href']),
+        plaintext2html=[int(i) for i in d['plaintext2html']])
+
+
+@dataclass
 class Ebook:
     title: str
     author: str
     chapters: list[TextSegment]
+    epub_chapter_mapping: list[EpubChapterMapping]|None = None
 
     def to_serializable_dict(self):
         return {
             'title': str(self.title),
             'author': str(self.author),
-            'chapters': [ts.to_serializable_dict() for ts in self.chapters]
+            'chapters': [ts.to_serializable_dict() for ts in self.chapters],
+            'epub_chapter_mapping': [m.to_serializable_dict() for m in self.epub_chapter_mapping] \
+                                    if self.epub_chapter_mapping is not None else None,
         }
 
 
@@ -117,7 +158,7 @@ def audiobooktranscription_from_dict(json_as_dict: dict) -> AudioTranscription:
     return AudioTranscription(chunks=chunks)
 
 
-def merge_audio_transcriptions(transcriptions: Iterable[AudioTranscription]):
+def merge_audio_transcriptions(transcriptions: Iterable[AudioTranscription]) -> AudioTranscription:
     chunks_all = []
     for tr in transcriptions:
         chunks_all.extend(tr.chunks)

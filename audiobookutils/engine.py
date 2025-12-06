@@ -1,8 +1,9 @@
-from .common import AudioTranscription, TextSegment, Ebook, CorpusLocation, ebook_from_dict, corpuslocation_from_dict, merge_audio_transcriptions
+from .common import AudioTranscription, TextSegment, Ebook, CorpusLocation, EpubChapterMapping, \
+    ebook_from_dict, corpuslocation_from_dict, merge_audio_transcriptions
 from .logging import LoggerFactory
 from .sequence_alignment import CorpusAligner
 from .pager import PageOptions, Pager
-from .renderers import Renderer, SRTRenderer
+from .renderers import Renderer, SRTRenderer, ReadaloudRenderer
 
 from ebooklib import epub
 from bs4 import BeautifulSoup
@@ -15,6 +16,8 @@ from pathlib import Path
 from dataclasses import dataclass
 import sys
 import json
+import enum
+import re
 
 
 @dataclass
@@ -65,20 +68,30 @@ def ebook_transcription_match_result_from_dict(d: dict) -> EbookTranscriptionMat
     return EbookTranscriptionMatchResult(book=ebook, matches=matches)
 
 
+class EpubHtmlParseMethod(enum.Enum):
+    BEAUTIFULSOUP = "BEAUTIFULSOUP"
+    DISSOLVE_TAGS = "DISSOLVE_TAGS"
+
+
 class Engine:
-    def __init__(self, loggerfactory: LoggerFactory, aligner: CorpusAligner, renderer: Renderer):
+    def __init__(self, loggerfactory: LoggerFactory, aligner: CorpusAligner,
+                 renderer: Renderer|None=None,
+                 epubhtml_parse_method: EpubHtmlParseMethod=EpubHtmlParseMethod.BEAUTIFULSOUP):
         self.logger = loggerfactory.get_logger(self.__class__.__name__)
         self.aligner = aligner
-        self.renderer = renderer
+        self.renderer: Renderer|None = renderer
+        self.epubhtml_parse_method = epubhtml_parse_method
+        self._ebook: Ebook|None = None
 
-    def match_ebook_and_audio_transcriptions(self, ebook_path: os.PathLike, transcriptions: Sequence[AudioTranscription]) -> EbookTranscriptionMatchResult:
-        book = self._load_ebook(ebook_path)
-        all_chapters = list(book.chapters)
+    def match_ebook_and_audio_transcriptions(self, transcriptions: Sequence[AudioTranscription]) -> EbookTranscriptionMatchResult:
+        if self._ebook is None:
+            raise ValueError("Ebook not loaded")
+        all_chapters = list(self._ebook.chapters)
         matches = []
         for transcription_idx, transcription in enumerate(transcriptions):
             transcription_words = [chunk.text for chunk in transcription.chunks]
-            self.logger.info("Performing alignment of transcription %d/%d: %s (#words: %d)",
-                             transcription_idx+1, len(transcriptions), ebook_path, len(transcription_words))
+            self.logger.info("Performing alignment of transcription %d/%d (#words: %d)",
+                             transcription_idx+1, len(transcriptions), len(transcription_words))
             alignment = self.aligner.perform_alignment(source_corpus=all_chapters, target_words=transcription_words)
             for word_idx, (start_loc, end_loc) in alignment.items():
                 chunk = transcription.chunks[word_idx]
@@ -86,31 +99,65 @@ class Engine:
                     audio_file=chunk.file_path,
                     start_secs=chunk.start_secs, end_secs=chunk.end_secs,
                     start_location=start_loc, end_location=end_loc))
-        return EbookTranscriptionMatchResult(book=book, matches=matches)
+        return EbookTranscriptionMatchResult(book=self._ebook, matches=matches)
 
-    def render(self, book: Ebook, matches: Sequence[EbookTranscriptionMatch], transcriptions: Iterable[AudioTranscription], page_options: PageOptions):
-        pager = Pager()
-        self.logger.info("Converting Ebook (%s) chapters (#=%d) to pages...", book.title, len(book.chapters))
-        paging_result = pager.to_pages(chapters=book.chapters, options=page_options)
+    def render(self, matches: Sequence[EbookTranscriptionMatch], transcriptions: Iterable[AudioTranscription],
+               convert_to_pages: bool, page_options: PageOptions):
+        """
+        Args:
+            convert_to_pages: chapters will be repaged; do not use if using the readaloud renderer
+            page_options: only applied if `convert_to_pages`
+        """
+        if self._ebook is None:
+            raise ValueError("Ebook not loaded")
+        if self.renderer is None:
+            raise ValueError("Renderer not set")
 
         transcription = merge_audio_transcriptions(transcriptions)
-        chunk_locations_in_pages = []
-        n_unmatched_chunks = 0
-        for i_chunk, match in enumerate(matches):
-            chunk_st_chap_loc = match.start_location
-            chunk_ed_chap_loc = match.end_location
-            if chunk_st_chap_loc in paging_result.chaps2pages and \
-                chunk_ed_chap_loc in paging_result.chaps2pages:
-                chunk_st_page_loc = paging_result.chaps2pages[chunk_st_chap_loc]
-                chunk_ed_page_loc = paging_result.chaps2pages[chunk_ed_chap_loc]
-                chunk_locations_in_pages.append((chunk_st_page_loc, chunk_ed_page_loc))
-            else:
-                n_unmatched_chunks += 1
-                chunk_locations_in_pages.append(None)
+
+        if convert_to_pages:
+            pager = Pager()
+            self.logger.info("Converting Ebook (%s) chapters (#=%d) to pages...", self._ebook.title, len(self._ebook.chapters))
+            paging_result = pager.to_pages(chapters=self._ebook.chapters, options=page_options)
+
+            chunk_locations = []
+            n_unmatched_chunks = 0
+            for i_chunk, match in enumerate(matches):
+                chunk_st_chap_loc = match.start_location
+                chunk_ed_chap_loc = match.end_location
+                if chunk_st_chap_loc in paging_result.chaps2pages and \
+                    chunk_ed_chap_loc in paging_result.chaps2pages:
+                    chunk_st_page_loc = paging_result.chaps2pages[chunk_st_chap_loc]
+                    chunk_ed_page_loc = paging_result.chaps2pages[chunk_ed_chap_loc]
+                    chunk_locations.append((chunk_st_page_loc, chunk_ed_page_loc))
+                else:
+                    n_unmatched_chunks += 1
+                    chunk_locations.append(None)
+            pages = paging_result.pages
+        else:
+            pages = self._ebook.chapters
+            chunk_locations = [(m.start_location, m.end_location) for m in matches]
         self.logger.info("Start rendering using %s...", self.renderer)
-        self.renderer.render(transcription=transcription, pages=paging_result.pages,
-                             chunk_locations=chunk_locations_in_pages)
+        self.renderer.render(transcription=transcription, pages=pages, chunk_locations=chunk_locations)
         self.logger.info("Rendering finished")
+
+    def load_ebook(self, ebook_path: os.PathLike) -> bool:
+        if self._ebook is not None:
+            self.logger.error("Ebook is already loaded")
+            return False
+        else:
+            self.logger.info("Loading ebook from: %s", ebook_path)
+            self._ebook = self._load_ebook(ebook_path)
+            return True
+
+    def set_renderer(self, renderer: Renderer) -> None:
+        self.renderer = renderer
+
+    def get_ebook(self) -> Ebook:
+        if self._ebook is None:
+            raise ValueError("No ebook loaded")
+        else:
+            return self._ebook
 
     def _load_ebook(self, ebook_path: os.PathLike) -> Ebook:
         """
@@ -136,12 +183,12 @@ class Engine:
                     else:
                         author = str(cr[0])
                 break
-        chaps = self._extract_chapters(book)
+        chaps, chaps_mappings = self._extract_chapters(book)
         self.logger.info("Extracted %d chapter(s) from ebook (title: %s, author: %s, file: %s)",
                          len(chaps), title, author, ebook_path)
-        return Ebook(title=book.title, author=author, chapters=chaps)
+        return Ebook(title=book.title, author=author, chapters=chaps, epub_chapter_mapping=chaps_mappings)
 
-    def _extract_chapters(self, book: epub.EpubBook) -> list[TextSegment]:
+    def _extract_chapters(self, book: epub.EpubBook) -> tuple[list[TextSegment], list[EpubChapterMapping]|None]:
         """
         Read table of contents and return list of chapters
         """
@@ -158,24 +205,72 @@ class Engine:
                         chap_links.append(sub_item)
 
         chaps = []
+        chap_mappings = []
+        has_chap_mappings = False
         for ichap in range(len(chap_links)):
-            chap_epubhtml = book.get_item_with_href(chap_links[ichap].href)
-            if chap_epubhtml is None:
-                raise ValueError("Failed to parse chapter {}/{}: {} ({})".format(
-                    ichap+1, len(chap_links), chap_links[ichap].title, chap_links[ichap].href))
-            chaps.append(self._parse_chapter_epubhtml(title=chap_links[ichap].title, epubhtml=chap_epubhtml))
-        return chaps
+            chap_href: str = chap_links[ichap].href
+            chap_epubhtml: epub.EpubHtml = book.get_item_with_href(chap_href) # type: ignore
+            chap_html_content = chap_epubhtml.content.decode('utf-8')
+            parsed_chap_textsegment, chap_parsed2html_mapping = \
+                self._parse_chapter_epubhtml(title=chap_links[ichap].title, html_content=chap_html_content)
+            if chap_parsed2html_mapping is not None:
+                has_chap_mappings = True
+                chap_mappings.append(
+                    EpubChapterMapping(chapter_index=ichap, href=chap_href, plaintext2html=chap_parsed2html_mapping))
+            else:
+                if has_chap_mappings:
+                    raise AssertionError("chap mappings only exist for a subset - this shall not happen")
+            chaps.append(parsed_chap_textsegment)
+        if has_chap_mappings and len(chaps) != len(chap_mappings):
+            raise AssertionError("Unequal # read chaps and mappings - this shall not happen")
 
-    def _parse_chapter_epubhtml(self, title: str, epubhtml: epub.EpubHtml) -> TextSegment:
-        chap_soup = BeautifulSoup(epubhtml.content, 'html.parser')
-        ch_title_e = chap_soup.select_one('title')
-        if ch_title_e is not None:
-            ch_title_e.decompose()
-        ch_title_e2 = chap_soup.select_one('h1.title')
-        if ch_title_e2 is not None:
-            ch_title_e2.decompose()
-        ch_text = chap_soup.text
-        return TextSegment(name=title, text=ch_text)
+        return chaps, chap_mappings if has_chap_mappings else None
+
+    def _parse_chapter_epubhtml(self, title: str, html_content: str) \
+            -> tuple[TextSegment, list[int]|None]:
+        """
+        Returns:
+            TextSegment of parsed chapter and,
+            optional parsed text to original HTML mapping
+            (list[int] where given j = list[i] j is the index in the original html content
+            corresponding to parsed text at index i;
+            0 <= i <= len(parsed text) - 1, 0 <= j <= len(html_content) - 1)
+            Note that this mapping is only possible to compute for the following parse methods:
+            - DISSOLVE_TAGS
+        """
+        ch_text: str = None # type: ignore
+        ch_text2html: list[int]|None = None
+        match self.epubhtml_parse_method:
+            case EpubHtmlParseMethod.BEAUTIFULSOUP:
+                chap_soup = BeautifulSoup(html_content, 'html.parser')
+                ch_title_e = chap_soup.select_one('title')
+                if ch_title_e is not None:
+                    ch_title_e.decompose()
+                ch_title_e2 = chap_soup.select_one('h1.title')
+                if ch_title_e2 is not None:
+                    ch_title_e2.decompose()
+                ch_text = chap_soup.text
+            case EpubHtmlParseMethod.DISSOLVE_TAGS:
+                SPACE_CHAR = " "
+                plain_content_chars = [c for c in html_content]
+                if "<body>" in html_content and "</body>" in html_content:
+                    body_start_tag_idx = html_content.index("<body>")
+                    body_end_tag_idx = html_content.index("</body>")
+                    for i in range(body_start_tag_idx):
+                        plain_content_chars[i] = SPACE_CHAR
+                    for i in range(body_end_tag_idx, len(html_content)):
+                        plain_content_chars[i] = SPACE_CHAR
+
+                tag_pat = re.compile(r"</?[^>]+/?>")
+                for m in re.finditer(tag_pat, html_content):
+                    for tag_idx in range(m.start(0), m.end(0)):
+                        plain_content_chars[tag_idx] = SPACE_CHAR
+                ch_text = "".join(plain_content_chars)
+                assert len(ch_text) == len(html_content)
+                ch_text2html = list(range(len(html_content)))
+            case _:
+                raise ValueError("Unknown EpubHtmlParseMethod: {}".format(epubhtml_parse_method))
+        return (TextSegment(name=title, text=ch_text), ch_text2html)
 
 
 @hydra.main(version_base=None, config_path='../conf', config_name='match_book_and_audio')
@@ -199,18 +294,49 @@ def main(conf: DictConfig):
     from .sequence_alignment import GlobalNormalizedWordAligner
     from .common import audiobooktranscription_from_dict
 
-
     aligner = GlobalNormalizedWordAligner(loggerfactory=lf,
                                           use_dp=conf['aligner_use_dp'],
                                           remove_spaces_around_matches=conf['aligner_remove_whitespaces_around_words'])
-    renderer = SRTRenderer(loggerfactory=lf, output_directory=output_dir)
-    engine = Engine(loggerfactory=lf, aligner=aligner, renderer=renderer)
+    match conf['epub_html_parse_method']:
+        case 'BEAUTIFULSOUP':
+            epub_html_parse_method = EpubHtmlParseMethod.BEAUTIFULSOUP
+        case 'DISSOLVE_TAGS':
+            epub_html_parse_method = EpubHtmlParseMethod.DISSOLVE_TAGS
+        case _:
+            print("Unknown epub_html_parse_method: {}".format(conf['epub_html_parse_method']), file=sys.stderr)
+            exit(1)
+    engine = Engine(loggerfactory=lf, aligner=aligner, epubhtml_parse_method=epub_html_parse_method)
 
     ebook_path = conf['ebook_path']
     if not os.path.isfile(ebook_path):
         print("Invalid ebook path; file does not exist: %s" % ebook_path, file=sys.stderr)
         exit(1)
     logger.info("Ebook path: %s", ebook_path)
+    engine.load_ebook(ebook_path)
+
+    convert_to_pages = True
+    match conf['output_format']:
+        case 'srt':
+            renderer = SRTRenderer(loggerfactory=lf, output_directory=output_dir)
+        case 'readaloud':
+            ebook = engine.get_ebook()
+            if ebook.epub_chapter_mapping is None:
+                raise ValueError("Unable to render Readaloud when epub chapter mapping data is nonexistent")
+            index2href = dict()
+            loc_mappings = dict()
+            for chap_mapping in ebook.epub_chapter_mapping:
+                index2href[chap_mapping.chapter_index] = chap_mapping.href
+                loc_mappings[chap_mapping.href] = chap_mapping.plaintext2html
+
+            renderer = ReadaloudRenderer(loggerfactory=lf, output_directory=output_dir,
+                                         original_epub_path=ebook_path,
+                                         document_index_to_href=index2href,
+                                         original_epub_location_mappings=loc_mappings)
+            convert_to_pages = False
+        case _:
+            print("Unknown output format: {}".format(conf['output_format']), file=sys.stderr)
+            exit(1)
+    engine.set_renderer(renderer)
 
     paging_conf = conf['paging']
 
@@ -230,9 +356,9 @@ def main(conf: DictConfig):
 
     # Match ebook and audio transcription(s)
     match_result_path = output_dir / "ebook_and_audio_transcriptions_match.json"
-    if not match_result_path.is_file():
+    if conf['always_realign'] or not match_result_path.is_file():
         logger.info("Matching ebook '%s' with %d audio transcription(s)", ebook_path, len(transcriptions))
-        match_result = engine.match_ebook_and_audio_transcriptions(ebook_path=ebook_path, transcriptions=transcriptions)
+        match_result = engine.match_ebook_and_audio_transcriptions(transcriptions=transcriptions)
         logger.info("Writing match results to: %s", match_result_path)
         with open(match_result_path, 'w', encoding='utf-8') as f:
             json.dump(match_result.to_serializable_dict(), f, indent=2, ensure_ascii=False)
@@ -246,9 +372,10 @@ def main(conf: DictConfig):
     # Render
     page_options = PageOptions(max_lines=paging_conf['max_lines'],
                                max_chars_per_line=paging_conf['max_characters_per_line'])
-    logger.info("Start rendering book (%s) with options: %s", match_result.book.title, page_options)
-    engine.render(book=match_result.book, matches=match_result.matches,
-                  transcriptions=transcriptions, page_options=page_options)
+    if convert_to_pages:
+        logger.info("Start rendering book (%s) with options: %s", match_result.book.title, page_options)
+    engine.render(matches=match_result.matches, transcriptions=transcriptions,
+                  convert_to_pages=convert_to_pages, page_options=page_options)
     logger.info("Finished")
 
 

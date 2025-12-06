@@ -1,4 +1,4 @@
-from .renderers_common import Renderer
+from .renderers_common import Renderer, RenderingFailedError
 from ..common import AudioTranscription, CorpusLocation, TextSegment
 from ..logging import LoggerFactory
 
@@ -40,32 +40,37 @@ class SRTRenderer(Renderer):
         file_index = 0
         last_page_audio_fp = None
         for page, page_content in enumerate(tqdm(pages, desc="Processing pages for SRT")):
-            if page not in pages_st_ed_timings:
-                continue
-            if page == 0:
-                sub_blocks.append(self._get_subtitle_block(start_secs=0, end_secs=cur_chunk.start_secs,
-                                                           page=page_content.text, highlight_range=None))
-            page_timings = pages_st_ed_timings[page]
-            page_audio_fp = self._canon_path(page_timings.audio_file_path_at_page_start)
-            while cur_chunk.end_secs <= page_timings.end_secs \
-                and cur_chunk_fp == page_audio_fp:
-                highlight_range = None
-                if chunk_locations[cur_chunk_idx] is not None:
-                    highlight_range = (chunk_locations[cur_chunk_idx][0].character_index, # type: ignore
-                                       chunk_locations[cur_chunk_idx][1].character_index) # type: ignore
-                end_secs = chunks[cur_chunk_idx+1].start_secs if cur_chunk_idx < len(chunks) - 1 else cur_chunk.end_secs
-                sub_blocks.append(self._get_subtitle_block(
-                    start_secs=cur_chunk.start_secs, end_secs=end_secs, page=page_content.text,
-                    highlight_range=highlight_range))
-                if cur_chunk_idx >= len(chunks) - 1:
-                    break
-                else:
-                    cur_chunk_idx += 1
-                    cur_chunk = chunks[cur_chunk_idx]
-                    cur_chunk_fp = self._canon_path(cur_chunk.file_path)
+            page_audio_fp = None
+            if page in pages_st_ed_timings:
+                if page == 0:
+                    sub_blocks.append(self._get_subtitle_block(start_secs=0, end_secs=cur_chunk.start_secs,
+                                                               page=page_content.text, highlight_range=None))
+                page_timings = pages_st_ed_timings[page]
+                page_audio_fp = self._canon_path(page_timings.audio_file_path_at_page_start)
+                while cur_chunk.end_secs <= page_timings.end_secs \
+                    and cur_chunk_fp == page_audio_fp:
+                    highlight_range = None
+                    if chunk_locations[cur_chunk_idx] is not None:
+                        highlight_range = (chunk_locations[cur_chunk_idx][0].character_index, # type: ignore
+                                           chunk_locations[cur_chunk_idx][1].character_index) # type: ignore
+                    end_secs = chunks[cur_chunk_idx+1].start_secs if cur_chunk_idx < len(chunks) - 1 else cur_chunk.end_secs
+                    sub_blocks.append(self._get_subtitle_block(
+                        start_secs=cur_chunk.start_secs, end_secs=end_secs, page=page_content.text,
+                        highlight_range=highlight_range))
+                    if cur_chunk_idx >= len(chunks) - 1:
+                        break
+                    else:
+                        cur_chunk_idx += 1
+                        cur_chunk = chunks[cur_chunk_idx]
+                        cur_chunk_fp = self._canon_path(cur_chunk.file_path)
 
-            if cur_chunk_fp != page_audio_fp or page == len(pages) - 1:
-                fn = Path(last_page_audio_fp or page_audio_fp).stem + ".srt"
+            if (page_audio_fp is not None and cur_chunk_fp != page_audio_fp) or page == len(pages) - 1:
+                if last_page_audio_fp is not None:
+                    fn = Path(last_page_audio_fp).stem + ".srt"
+                else:
+                    if page_audio_fp is None:
+                        raise RenderingFailedError("Unable to determine audio file path for SRT export")
+                    fn = Path(page_audio_fp).stem + ".srt"
                 save_path = self.output_dir / fn
                 self.logger.info("Saving subtitle file %d to: %s", file_index+1, save_path)
                 self._save_subtitles(sub_blocks=sub_blocks, save_path=save_path)
@@ -78,7 +83,8 @@ class SRTRenderer(Renderer):
                     cur_chunk_fp = self._canon_path(cur_chunk.file_path)
                     if cur_chunk_fp == page_audio_fp:
                         break
-            last_page_audio_fp = page_audio_fp
+            if page_audio_fp is not None:
+                last_page_audio_fp = page_audio_fp
 
     def _save_subtitles(self, sub_blocks: Sequence[SubtitleBlock], save_path: os.PathLike):
         save_path = Path(save_path)

@@ -47,7 +47,7 @@ class Renderer(ABC):
         for chunk_idx, chunk in enumerate(chunks):
             if chunk_locations[chunk_idx] is None:
                 continue
-            chunk_begin_loc, chunk_end_loc = chunk_locations[chunk_idx]
+            chunk_begin_loc, chunk_end_loc = chunk_locations[chunk_idx] # type: ignore
             if chunk_begin_loc.document_index != cur_page:
                 if chunk_begin_loc.document_index < cur_page:
                     raise ValueError("Invalid begin loc of chunk {}/{}: {}".format(
@@ -67,7 +67,5 @@ class Renderer(ABC):
         return page_timings
 
 
-
-
-
-
+class RenderingFailedError(Exception):
+    pass

@@ -12,10 +12,22 @@ transcription_result_paths: ???
 # Intermediate results may be read from here if this directory is not empty
 output_dir: ???
 
+# Output as subtitles: srt
+# Output as Readaloud epub: readaloud
+output_format: "srt"
+
+# Options: BEAUTIFULSOUP, DISSOLVE_TAGS
+# Must choose DISSOLVE_TAGS if output format is readlaloud
+epub_html_parse_method: "DISSOLVE_TAGS"
+
 # Use a dynamic programming algorithm during the transcriptiong <-> ebook matching process.
 # This option can produce a more faithful alignment but can be significantly slower.
 aligner_use_dp: true
 
 # Enabling this can lead to possibly much longer matching time.
 aligner_remove_whitespaces_around_words: false
+
+# If disabled, existing ebook_and_audio_transcriptions_match.json will be used when you rerun the program
+# Enable this if you want to experiment with different alingers and epub parse methods
+always_realign: false
 
